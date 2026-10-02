@@ -699,10 +699,7 @@ lager du **én gang, for hånd**, og pipelinen rører den aldri:
 
 ```bash
 sudo install -d -m 755 -o deploy -g deploy /opt/stack
-cd /opt/stack
-
-# .env med ekte hemmeligheter — ikke dev-verdiene
-cat > .env <<'EOF'
+sudo -u deploy tee /opt/stack/.env >/dev/null <<'EOF'
 POSTGRES_DB=claimthesquare
 POSTGRES_USER=claimuser
 POSTGRES_PASSWORD=<finn på noe sterkt>
@@ -710,8 +707,66 @@ API_IMAGE=ghcr.io/<deg>/claimthesquare
 IMAGE_TAG=sha-0000000
 API_PORT=8080
 EOF
-chmod 600 .env
+sudo chmod 600 /opt/stack/.env
 ```
+
+> **Hvor `.env` skal ligge: ved siden av `compose.prod.yml`, i `/opt/stack`.**
+> Ikke et annet sted, og ikke bare «i en katalog ved siden av».
+>
+> Grunnen er at `podman compose -f <fil>` slår opp `.env` **relativt til
+> compose-fila**, ikke relativt til katalogen du står i. Verifisert:
+>
+> | Du kjører fra | `podman compose -f /opt/stack/compose.prod.yml config` |
+> |---|---|
+> | `/opt/stack` | finner `.env` ✅ |
+> | `/opt` | finner `.env` (den ligger i katalogen over) ✅ |
+> | `/` eller hjemmemappen din | finner **ingenting** ❌ |
+>
+> I siste tilfelle blir `${API_IMAGE}` tom, og du får `image: :latest` — en
+> syntaktisk gyldig, men verdiløs referanse. Det er nøyaktig samme feil
+> `compose`-porten i M1 sjekker for med `grep -q "image: …"`.
+>
+> Konklusjonen er enkel: **kjør alltid `cd /opt/stack` før `podman compose`.**
+> Da er det ingen ting å huske på. Deploy-jobben gjør allerede dette
+> (`cd /opt/stack` i `bash -s`-blokken), så M5 og denne linja blir samme
+> kommando.
+>
+> **Men `cd` er ikke det som gjør at deploy-jobben virker.** Den `export`er
+> `API_IMAGE` og `IMAGE_TAG` selv — og eksporterte varianter **vinner over**
+> `.env`. Verifisert: med `API_IMAGE=… podman compose … config` blir bildet
+> `ghcr.io/FRA-EXPORT/…`, ikke det som står i `.env`.
+>
+> Det som *må* komme fra `.env`, er `POSTGRES_PASSWORD` — jobben rører den ikke.
+> Så det er derfor fila må være lesbar **for `deploy`**: en fil `deploy` ikke kan
+> åpne, gir en container som starter med tomt passord og en Postgres som nekter
+> alle koblinger. Det er verdt å vite hvilken variabel som bærer hvilken
+> bekymring:
+
+| Variabel | Kommer fra | Hvis den mangler |
+|---|---|---|
+| `API_IMAGE`, `IMAGE_TAG` | `export` i deploy-jobben | `image: :latest` |
+| `POSTGRES_*` (inkl. passord) | `.env` på serveren | Postgres nekter alle koblinger |
+
+> **Hvorfor `sudo -u deploy tee`, og ikke bare `cat > .env`?** Du er logget inn
+> som `ubuntu`. `cat > .env` lager fila som **`ubuntu`**, og så kjører
+> `chmod 600` — og da kan **`deploy` ikke lese den**. `deploy` er brukeren som
+> faktisk kjører containerne, så du får en feilmelding som ser ut som om
+> Postgres er ødelagt.
+>
+> Det er verdt å se en gang, fordi feilmeldingen ikke peker på årsaken. Fra
+> `ssh deploy@…`:
+>
+> ```bash
+> head -1 /opt/stack/.env
+> # cat: /opt/stack/.env: Permission denied
+> ```
+>
+> Riktig eierskap er derfor hele poenget med `sudo -u deploy tee` — filen
+> havner som `deploy` fra første byte. Sjekk den når du er ferdig:
+>
+> ```bash
+> ls -l /opt/stack/.env     # -rw------- 1 deploy deploy …
+> ```
 
 > **Hvorfor `IMAGE_TAG=sha-0000000` her og ikke en ekte tag?** Fordi pipelinen
 > setter `IMAGE_TAG` selv når den deployer. Det som bor i denne fila, er
@@ -720,16 +775,33 @@ chmod 600 .env
 Så kan du gjøre den første utrullingen for hånd, akkurat som hjemme:
 
 ```bash
-mkdir -p db/init
 # fra din egen maskin:
 scp compose.prod.yml deploy@<VPS-IP>:/opt/stack/
+# `scp` med en sti som ikke finnes, ville falt på den som oppretter den —
+# så lag katalogen først, med eierskap til deploy:
+ssh deploy@<VPS-IP> 'mkdir -p /opt/stack/db/init'
 scp db/init/01_schema.sql deploy@<VPS-IP>:/opt/stack/db/init/
-# på serveren:
+
+# på serveren, som deploy:
 cd /opt/stack
 podman compose -f compose.prod.yml pull
 podman compose -f compose.prod.yml up -d
 curl --fail http://127.0.0.1:8080/health
 ```
+
+> **Hvorfor `ssh deploy@… 'mkdir -p …'` og ikke `mkdir -p db/init` lokalt på
+> serveren?** Du er logget inn som `ubuntu`. `mkdir` lager da katalogen som
+> `ubuntu`, og når `deploy` senere skal lese `db/init/01_schema.sql` får den
+> feilmeldingen fra Postgres om at init-skriptet ikke kjører — altså felle nr. 1
+> en gang til, denne gangen på serveren. Ved å kjøre `mkdir` gjennom `ssh
+> deploy@` blir den eiert av `deploy` som en sideeffekt.
+>
+> Det er nøyaktig samme trikk deploy-jobben bruker — den har
+> `ssh "<user>@<host>" "mkdir -p /opt/stack/db/init"` rett før `scp`-ene. Se M5.
+>
+> Og **alltid `cd /opt/stack` før `podman compose`** — jmf. `.env`-tabellen
+> over. Uten `cd` kan du få `image: :latest` i stedet for imaget du mente, og
+> du mister i alle fall `POSTGRES_PASSWORD`.
 
 ### 4e. TLS
 
@@ -922,6 +994,10 @@ Feilsøk:
     (sjekk: podman compose logs db | grep initdb)
   alt grønt lokalt, 502 fra nginx   → proxy_pass peker feil, eller API-et er nede
   `sudo nginx -t` og `sudo journalctl -u nginx -n 50`
+  Postgres nekter alle koblinger     → POSTGRES_PASSWORD kom ikke fram
+    (sjekk: `head -1 /opt/stack/.env` som deploy — "Permission denied" betyr
+     at .env ble laget av en annen bruker, se 4d)
+  image: :latest i `compose config` → .env ble ikke lest, kjør fra /opt/stack
 
 Skjema: init-skriptet kjører BARE mot et tomt volum. Skjemaendring i prod =
 down -v (sletter data) eller en egen migreringsjobb i pipelinen.
