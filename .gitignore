@@ -1,0 +1,54 @@
+# ═══════════════════════════════════════════════════════════
+# .gitignore for ClaimTheSquare
+#
+# Tre ting som MÅ ut her:
+#   1. Hemmeligheter.  .env er aldri i Git. .env.example ER i Git — den er
+#      kontrakten om hvilke variabler stacken trenger. Linjen !.env.example
+#      under opprettholder det.
+#   2. Byggeutfall.     bin/ og obj/ er maskin-generert og inneholder
+#      absolute stier fra din maskin. De er deterministisk ubrukelige på en
+#      annen maskin, og de fyller repoet med 200+ filer per commit.
+#   3. Verktøy-støv.    .kilo/ er editor-hjelp, ikke kode.
+# ═══════════════════════════════════════════════════════════
+
+# ── Hemmeligheter ────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── .NET ─────────────────────────────────────────────────────
+bin/
+obj/
+publish/
+*.user
+*.suo
+*.userprefs
+TestResults/
+[Ll]og/
+[Ll]ogs/
+artifacts/
+
+# ── IDE / editor ─────────────────────────────────────────────
+.vs/
+.idea/
+.vscode/
+*.swp
+*~
+
+# ── Podman / compose ─────────────────────────────────────────
+# Lokale override-filer er personlige og skal ikke i Git.
+compose.override.yml
+compose.*.local.yml
+.podman/
+# Eksporterte images: `podman save` lager disse, og de er gigabytes.
+*.tar
+*.tar.gz
+
+# ── OS ───────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Verktøy ──────────────────────────────────────────────────
+.kilo/
+node_modules/
