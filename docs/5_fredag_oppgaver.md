@@ -183,6 +183,68 @@ Følg kjøringen i Actions. Alle fire jobbene skal bli grønne.
 - [ ] Pakken er public
 - [ ] `sha-…` står i notatboken din, bokstav for bokstav
 
+### Push fra maskinen, manuelt
+
+Pipelinen i `ci.yml` pusher selv (M2 er lagt til *etter* en grønn `image`-port).
+Men det er nyttig å kunne gjøre det samme for hånden — første gang du gjør det
+lærer du tre ting samtidig: **hvem du er** i registret, **hva et image egentlig
+er** (et lokalt tagget navn), og **at taggen er en peker, ikke innhold**.
+
+Dette er også den raskeste veien til et image å pushe hvis du vil prøve M3 før
+pipelinen er grønn.
+
+**Steg 1 — logg inn mot GHCR.** Registret godtar en token med `write:packages`,
+ikke ditt GitHub-passord:
+
+```bash
+podman login ghcr.io -u geokkjer --password-stdin <<< "$(gh auth token)"
+```
+
+> `gh auth token` henter tokenet `gh` allerede har. Scopes må inneholde
+> `write:packages` — sjekk med `gh auth status`. Token havner i
+> `~/.config/containers/auth.json`; det er samme fil som Docker bruker, og
+> samme som `docker login` ville skrevet.
+
+**Steg 2 — bygg lokalt med samme tagger som CI bruker.** CI tagger med den korte
+commit-SHA-en. Samme regel lokalt:
+
+```bash
+SHA=$(git rev-parse --short HEAD)          # f.eks. 30700a8
+podman build -f ClaimTheSquare/Dockerfile \
+  --build-arg APP_VERSION="sha-$SHA" -t "ghcr.io/geokkjer/claimthesquare:sha-$SHA" .
+podman tag "ghcr.io/geokkjer/claimthesquare:sha-$SHA" ghcr.io/geokkjer/claimthesquare:latest
+```
+
+> **Hvorfor `--build-arg APP_VERSION`?** Uten den blir versjonen `dev`, og da
+> svarer `/health` med `dev` selv om taggen sier `sha-…`. I M3 skal alle fire
+> kontrollene være enige — og de kan bare være enige hvis versjonen ble brent
+> inn i imaget. `compose.prod.yml` setter riktignok `APP_VERSION=${IMAGE_TAG}`
+> som miljøvariabel, som vinner over `ENV` i Dockerfile-en; men i M1/M2 er det
+> bare imaget som har sannheten.
+
+**Steg 3 — push.** Ett image, to tagger. `podman push` sender lagene over
+nettverket; det andre tagget er gratis, fordi lagene allerede er lastet opp:
+
+```bash
+podman push ghcr.io/geokkjer/claimthesquare:sha-$SHA
+podman push ghcr.io/geokkjer/claimthesquare:latest
+```
+
+**Steg 4 — se at det kom.** Lokalt, uten å røre noe:
+
+```bash
+podman pull ghcr.io/geokkjer/claimthesquare:sha-$SHA
+podman inspect "ghcr.io/geokkjer/claimthesquare:sha-$SHA" --format '{{.Id}}'
+```
+
+Samme image-ID på begge er bevis på at de to taggene peker på samme ting.
+
+> **Felle:** pakken arver visningen fra repoet. Er repoet **privat**, arver
+> pakken privat synlighet, og `podman pull` svarer `denied` — selv om pushen
+> lyktes, fordi pushen bruker *din* autorisasjon og pull gjør det ikke.
+> Gjør pakken public i *Package settings* → *Change visibility*, eller bruk et
+> PAT når du skal hente noe som er privat.
+
 ---
 
 ## M3 — prod-sim lokalt: kjør imaget du ikke bygde (11:00–11:45)
