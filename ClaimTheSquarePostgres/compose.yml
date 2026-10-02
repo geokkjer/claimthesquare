@@ -1,0 +1,91 @@
+# ═══════════════════════════════════════════════════════════
+# DEV: API-et bygges fra din egen kode, db hentes fra Docker Hub.
+#
+#   Start:     podman compose up -d --build
+#   Verifiser: curl --fail http://localhost:8080/health
+#   Åpne:      http://localhost:8080
+#   Logg:      podman compose logs -f api
+#   Stopp:     podman compose down        (beholder data)
+#              podman compose down -v     (sletter data)
+# ═══════════════════════════════════════════════════════════
+name: claimthesquare
+
+services:
+  db:
+    image: docker.io/library/postgres:16
+    container_name: claim-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app-network
+
+  api:
+    build:
+      # Bygget skjer fra repo-rota: Dockerfile-en trenger solution-filen og
+      # begge .csproj-filene for å restorre riktig.
+      context: .
+      dockerfile: ClaimTheSquare/Dockerfile
+      args:
+        APP_VERSION: dev
+    container_name: claim-api
+    restart: unless-stopped
+    environment:
+      ASPNETCORE_URLS: http://0.0.0.0:8080
+      ASPNETCORE_ENVIRONMENT: Development
+      APP_VERSION: dev
+      # Appen eier skjemaet i dev, så en fersk database virker uten at noen
+      # må huske rekkefølgen. I prod settes denne til "false".
+      MIGRATE_ON_STARTUP: "true"
+      # «db» er tjenestenavnet over — ikke localhost. Inne i app-network har
+      # hver tjeneste et DNS-navn lik tjenestenavnet.
+      ConnectionStrings__Postgres: "Host=db;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}"
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      # /health svarer på prosessen. Vil du også bevise databasekjeden, pek på
+      # /text-objects i stedet — den gjør et ekte kall mot Postgres.
+      # 127.0.0.1, ikke localhost: Kestrel binder IPv4 (0.0.0.0), mens
+      #   localhost i containeren ofte peker på ::1 først.
+      # GET, ikke --spider: --spider sender HEAD, og MapGet svarer 405.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - app-network
+
+  # Valgfritt GUI, bak en profile: starter bare med `--profile tools`.
+  # Ikke med i compose.prod.yml — et database-GUI er ikke en produksjonstjeneste.
+  pgadmin:
+    image: docker.io/dpage/pgadmin4:9
+    container_name: claim-pgadmin
+    profiles: ["tools"]
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@example.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-change-me}
+    ports:
+      - "5050:80"
+    networks:
+      - app-network
+
+volumes:
+  postgres_data:
+
+networks:
+  app-network:
+    driver: bridge

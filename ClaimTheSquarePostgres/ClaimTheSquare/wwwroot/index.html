@@ -1,0 +1,139 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <style>
+        .myGrid {
+            display: grid;
+            grid-template-columns: repeat(8, 50px);
+            grid-template-rows: repeat(8, 50px);
+        }
+
+            .myGrid > div {
+                overflow: hidden;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+            }
+
+        .myForm {
+            display: grid;
+            grid-template-columns: repeat(2, 150px);
+        }
+    </style>
+</head>
+
+<body>
+    <div id="app"></div>
+    <script>
+        let model;
+        init();
+        function updateView() {
+            document.getElementById('app').innerHTML = /*HTML*/`
+                ${createFormHtml()}
+                <div class="myGrid">
+                    ${createSquaresHtml()}
+                </div>
+            `;
+        }
+
+        function createSquaresHtml() {
+            let html = '';
+            for (let index = 0; index < 64; index++) {
+                let textObject = model.textObjects.find(to => to.index == index);
+                if (!textObject) {
+                    html += /*HTML*/`<div><button onclick="claim(${index})">fyll</button></div>`;
+                } else {
+                    html += /*HTML*/`
+                        <div style="color: ${textObject.foreColor}; background-color: ${textObject.backColor}">
+                            ${textObject.text}
+                        </div>`;
+                }
+            }
+            return html;
+        }
+
+        function createFormHtml() {
+            return /*HTML*/`
+                <div class="myForm">
+                    <div>Tekst:</div>
+                    <div>
+                        <input type="text"
+                               oninput="model.inputs.text=this.value"
+                               value="${model.inputs.text || ''}"
+                               />
+                    </div>
+                    <div>Forgrunnsfarge:</div>
+                    <div>${createColorSelect('model.inputs.foreColor')}</div>
+                    <div>Bakgrunnsfarge:</div>
+                    <div>${createColorSelect('model.inputs.backColor')}</div>
+                </div>
+            `;
+        }
+
+        function createColorSelect(modelField) {
+            const selectedColor = eval(modelField);
+            let optionsHtml = '';
+            const noneSelected = selectedColor == null ? 'selected' : '';
+            for (let color of model.colors) {
+                const selected = color == selectedColor ? 'selected' : '';
+                optionsHtml += /*HTML*/`
+                    <option ${selected}>${color}</option>
+                `;
+            }
+            return /*HTML*/`
+                <select onchange="${modelField}=this.value">
+                    <option ${noneSelected}></option>
+                    ${optionsHtml}
+                </select>
+                `;
+        }
+
+        async function claim(index) {
+            const inputs = model.inputs;
+            if (inputs.foreColor == null
+                || inputs.backColor == null
+                || inputs.text == null
+                || inputs.text.trim().length == 0
+            ) return;
+            //model.textObjects.push({ ...inputs, index });
+            model.inputs = {
+                foreColor: null,
+                backColor: null,
+                text: null,
+            };
+            const data = { ...inputs, index };
+            const response = await axios.post('text-objects', data);
+            console.log(response.data);
+            getData();
+        }
+
+        function init() {
+            model = {
+                inputs: {
+                    foreColor: null,
+                    backColor: null,
+                    text: null,
+                },
+                colors: ["black", "white", "gray", "silver", "maroon", "red", "purple", "fushsia", "green", "lime", "olive", "yellow", "navy", "blue", "teal", "aqua"],
+                /*textObjects: [
+                    { index: 17, text: 'Terje', backColor: 'green', foreColor: 'white' },
+                ]*/
+            };
+            getData();
+        }
+
+        async function getData(){
+            const response = await axios.get('/text-objects');
+            model.textObjects = response.data;
+            updateView();
+        }
+    </script>
+
+</body>
+
+</html>

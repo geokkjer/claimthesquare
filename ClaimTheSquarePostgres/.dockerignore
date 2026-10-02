@@ -1,0 +1,7 @@
+# Bygg skjer fra repo-rota (se compose.yml / ci.yml), fordi Dockerfile-en
+# trenger solution-filen og begge .csproj-filene for å restorre riktig.
+bin/
+obj/
+publish/
+.git/
+.env

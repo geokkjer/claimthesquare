@@ -1,0 +1,77 @@
+# ═══════════════════════════════════════════════════════════
+# PROD: ingen build — imaget kommer fra CI (GHCR).
+#
+#   API_IMAGE=ghcr.io/<bruker>/<repo>     # i .env — navn uten tag
+#   IMAGE_TAG=sha-a1b2c3d                 # i .env — hele deploy-knappen
+#   API_PORT=8080                         # i .env — bindes KUN til 127.0.0.1
+#
+#   podman compose -f compose.prod.yml pull
+#   podman compose -f compose.prod.yml up -d
+#   curl --fail http://127.0.0.1:8080/health
+#
+# Deler du server med andre, sett COMPOSE_PROJECT_NAME til noe eget i .env.
+# Da får hver stack sitt eget navnerom: containere, nettverk og volumer.
+#
+# PowerShell: $env:IMAGE_TAG="sha-a1b2c3d" (resten er identisk)
+# ═══════════════════════════════════════════════════════════
+name: ${COMPOSE_PROJECT_NAME:-claimthesquare-prod}
+
+services:
+  db:
+    image: docker.io/library/postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_prod_data:/var/lib/postgresql/data
+      # Skjemaet eies av DATABASEN i prod, ikke av appen. Postgres kjører
+      # *.sql i /docker-entrypoint-initdb.d én gang, den første gangen volumet
+      # er tomt. Skriptet er idempotent (CREATE TABLE IF NOT EXISTS).
+      #
+      # I dev eier appen skjemaet (MIGRATE_ON_STARTUP=true) så en ny database
+      # virker uten at noen må huske rekkefølgen. I prod er det motsatt:
+      # appen har ikke lov til å endre skjemaet sitt selv, og migreringer skal
+      # være et eget steg i pipelinen — én runner, én lås, ingen kappløp.
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    # IKKE build: — imaget hentes fra GHCR. Det er hele poenget.
+    image: ${API_IMAGE}:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      ASPNETCORE_URLS: http://0.0.0.0:8080
+      ASPNETCORE_ENVIRONMENT: Production
+      # Versjonen ligger i imaget (ARG APP_VERSION ved bygg). Denne linja gjør
+      # at /health melder den tilbake uten at noe bygges på nytt.
+      APP_VERSION: ${IMAGE_TAG:-latest}
+      # I prod eier ikke appen skjemaet. Migreringer skal være et eget steg i
+      # pipelinen (én runner, én lås, ingen kappløp) — se leksjonen.
+      MIGRATE_ON_STARTUP: "false"
+      ConnectionStrings__Postgres: "Host=db;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}"
+    # BIND TIL LOOPBACK. Dette er den eneste linja som gjør påstanden
+    # «bare nginx er eksponert» sann. Skriver du "8080:8080" publiserer du på
+    # 0.0.0.0, og da er brannmuren din eneste vegg.
+    #
+    # API_PORT gjør det mulig å kjøre flere student-stacker på én maskin uten
+    # at portene kolliderer. Standard er 8080, som er det du bruker lokalt.
+    ports:
+      - "127.0.0.1:${API_PORT:-8080}:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  postgres_prod_data:

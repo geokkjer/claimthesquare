@@ -1,0 +1,9 @@
+/tmp/cts-publish/ClaimTheSquare
+/tmp/cts-publish/appsettings.Development.json
+/tmp/cts-publish/appsettings.json
+/tmp/cts-publish/ClaimTheSquare.dll
+/tmp/cts-publish/ClaimTheSquare.deps.json
+/tmp/cts-publish/ClaimTheSquare.runtimeconfig.json
+/tmp/cts-publish/ClaimTheSquare.pdb
+/tmp/cts-publish/Dapper.dll
+/tmp/cts-publish/Npgsql.dll
