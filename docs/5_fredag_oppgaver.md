@@ -703,12 +703,37 @@ sudo -u deploy tee /opt/stack/.env >/dev/null <<'EOF'
 POSTGRES_DB=claimthesquare
 POSTGRES_USER=claimuser
 POSTGRES_PASSWORD=<finn på noe sterkt>
-API_IMAGE=ghcr.io/<deg>/claimthesquare
-IMAGE_TAG=sha-0000000
 API_PORT=8080
 EOF
 sudo chmod 600 /opt/stack/.env
 ```
+
+> **Legg merke til hva som *ikke* står der: `API_IMAGE` og `IMAGE_TAG`.**
+> De mangler med vilje, og det er den tredje feilen i denne oppgaven.
+>
+> **`IMAGE_TAG` i `.env` overstyrer pipelinen.** Verifisert på serveren med
+> podman-compose 1.0.6:
+>
+> ```bash
+> # .env sier IMAGE_TAG=fra-envfila
+> IMAGE_TAG=fra-export podman compose config | grep FAKTISK_TAGG
+> #   FAKTISK_TAGG: fra-envfila     ← .env vant
+> ```
+>
+> Så med `IMAGE_TAG=sha-dd2b589` i `.env` ville hver deploy startet
+> `sha-dd2b589` — uansett hvilken sha pipelinen pushet. Jobben blir grønn,
+> ingen feilmelding, og serveren kjører gammelt image. Det er den **stille
+> feil-modusen** fra M6D, i en skjorte du ikke kjenner igjen.
+>
+> (På podman-compose 1.6+ er det motsatt — der vinner `export`. Atferden er
+> versjonsavhengig, og det er nettopp derfor den ikke skal stå i `.env` i det
+> hele tatt.)
+>
+> `.env` skal inneholge **hemmeligheter og det som ikke er ferskt per
+> deploy**. Deploy-jobben setter `API_IMAGE` og `IMAGE_TAG` selv, hver gang,
+> fra verdier den får fra den grønne kjøringen. Er det en verdi i `.env` som
+> også finnes i jobben, har du lagt inn en konflikt — og på denne
+> compose-versjonen taper jobben.
 
 > **Hvor `.env` skal ligge: ved siden av `compose.prod.yml`, i `/opt/stack`.**
 > Ikke et annet sted, og ikke bare «i en katalog ved siden av».
@@ -732,9 +757,10 @@ sudo chmod 600 /opt/stack/.env
 > kommando.
 >
 > **Men `cd` er ikke det som gjør at deploy-jobben virker.** Den `export`er
-> `API_IMAGE` og `IMAGE_TAG` selv — og eksporterte varianter **vinner over**
-> `.env`. Verifisert: med `API_IMAGE=… podman compose … config` blir bildet
-> `ghcr.io/FRA-EXPORT/…`, ikke det som står i `.env`.
+> `API_IMAGE` og `IMAGE_TAG` selv. Hvem som vinner mellom `export` og `.env`,
+> avhenger av compose-versjonen: på podman-compose **1.0.6 vinner `.env`**, på
+> 1.6+ vinner `export`. Det er grunnen til at ingen av dem skal stå i `.env` —
+> se merknaden over.
 >
 > Det som *må* komme fra `.env`, er `POSTGRES_PASSWORD` — jobben rører den ikke.
 > Så det er derfor fila må være lesbar **for `deploy`**: en fil `deploy` ikke kan
@@ -746,6 +772,7 @@ sudo chmod 600 /opt/stack/.env
 |---|---|---|
 | `API_IMAGE`, `IMAGE_TAG` | `export` i deploy-jobben | `image: :latest` |
 | `POSTGRES_*` (inkl. passord) | `.env` på serveren | Postgres nekter alle koblinger |
+| `API_PORT` | `.env` (eller utelatt → 8080) | portkollisjon ved flere stacker |
 
 > **Hvorfor `sudo -u deploy tee`, og ikke bare `cat > .env`?** Du er logget inn
 > som `ubuntu`. `cat > .env` lager fila som **`ubuntu`**, og så kjører
@@ -998,6 +1025,15 @@ Feilsøk:
     (sjekk: `head -1 /opt/stack/.env` som deploy — "Permission denied" betyr
      at .env ble laget av en annen bruker, se 4d)
   image: :latest i `compose config` → .env ble ikke lest, kjør fra /opt/stack
+
+  deploy grønn, men /version.json viser en GAMMEL tagg → ingenting ble byttet.
+    To kandidater, begge stille:
+      1. IMAGE_TAG står i /opt/stack/.env — på podman-compose 1.0.6 vinner
+         .env over export, så pipelinen startet .env sin tagg. Se 4d.
+      2. "container name already in use" i loggen, uten at jobben ble rød.
+         `up -d` returnerer 0 selv når den feiler. Se M6D.
+    Fasit: `podman ps --filter name=<prosjekt>_api --format '{{.Image}}'` —
+    sammenlign med taggen i den grønne kjøringen.
 
 Skjema: init-skriptet kjører BARE mot et tomt volum. Skjemaendring i prod =
 down -v (sletter data) eller en egen migreringsjobb i pipelinen.
