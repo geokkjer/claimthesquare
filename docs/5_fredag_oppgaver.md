@@ -221,6 +221,11 @@ podman tag "ghcr.io/geokkjer/claimthesquare:sha-$SHA" ghcr.io/geokkjer/claimthes
 > inn i imaget. `compose.prod.yml` setter riktignok `APP_VERSION=${IMAGE_TAG}`
 > som miljøvariabel, som vinner over `ENV` i Dockerfile-en; men i M1/M2 er det
 > bare imaget som har sannheten.
+>
+> *Felle:* `APP_VERSION` må deklareres på **begge** stagene i Dockerfile-en.
+> `ARG` er stage-skopet, så en `ARG` i build-stagen arves ikke av
+> runtime-stagen — og sluttimaget får ingen versjon uansett hva du bygger med.
+> Det er akkurat feilen `ci.yml` hadde da denne leksjonen ble skrevet.
 
 **Steg 3 — push.** Ett image, to tagger. `podman push` sender lagene over
 nettverket; det andre tagget er gratis, fordi lagene allerede er lastet opp:
@@ -238,6 +243,18 @@ podman inspect "ghcr.io/geokkjer/claimthesquare:sha-$SHA" --format '{{.Id}}'
 ```
 
 Samme image-ID på begge er bevis på at de to taggene peker på samme ting.
+
+Start det, og sjekk at identitetskortet svarer med sha og ikke `latest`:
+
+```bash
+podman run -d --name t -p 8080:8080 \
+  -e MIGRATE_ON_STARTUP=false \
+  -e ConnectionStrings__Postgres="Host=db;Database=test;Username=test;Password=test" \
+  "ghcr.io/geokkjer/claimthesquare:sha-$SHA"
+sleep 5
+curl --fail --silent http://127.0.0.1:8080/version.json   # {"version":"sha-…"}
+podman rm -f t
+```
 
 > **Felle:** pakken arver visningen fra repoet. Er repoet **privat**, arver
 > pakken privat synlighet, og `podman pull` svarer `denied` — selv om pushen
