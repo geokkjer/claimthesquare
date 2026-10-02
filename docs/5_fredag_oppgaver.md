@@ -183,6 +183,24 @@ Følg kjøringen i Actions. Alle fire jobbene skal bli grønne.
 - [ ] Pakken er public
 - [ ] `sha-…` står i notatboken din, bokstav for bokstav
 
+> **Felle nr. 3, og den er den mest nesten:** det er lett å tro at
+> `steps.meta.outputs.version` er sha-taggen. Den er **ikke** det. Den er den
+> *første* taggen i metadata-actions prioritetsrekkefølge, og `type=raw,value=latest`
+> vinner over `type=sha` — så den er `latest`, uansett hvilket bygg du lagde.
+>
+> Bruker du den til `APP_VERSION`, brer du `latest` inn i identitetskortet, og
+> `/version.json` svarer `{"version":"latest"}` for *ethvert* bygg, alltid. Da
+> kan røyk-testen heller ikke bevise at porten kjører det du nettopp bygde: gre-en
+> `grep -q "$version"` passerer fordi appen sier `latest`, ikke fordi versjonen
+> stemmer. Og deploy-jobbens `needs.image.outputs.version` peker på `latest` —
+> du ruller ut `latest` i stillhet, og tror du deployer sha.
+>
+> Løsningen i `ci.yml` er å regne sha-taggen ut selv i et eget steg, og bruke
+> den samme verdien i build-arg, røyk-test, push og jobbens `outputs`.
+>(metadata-action beholdes for å lage tag-lista — den gjør det fortsatt riktig.)
+> Merk at oppgaveteksten opprinnelig pekte på `steps.meta.outputs.version` her;
+> det er nettopp feilen.
+
 ### Push fra maskinen, manuelt
 
 Pipelinen i `ci.yml` pusher selv (M2 er lagt til *etter* en grønn `image`-port).
@@ -194,10 +212,12 @@ Dette er også den raskeste veien til et image å pushe hvis du vil prøve M3 f�
 pipelinen er grønn.
 
 **Steg 1 — logg inn mot GHCR.** Registret godtar en token med `write:packages`,
-ikke ditt GitHub-passord:
+ikke ditt GitHub-passord. Sett `BRUKER` til ditt GitHub-brukernavn først — så
+ slipper du å skrive det inn ni steder:
 
 ```bash
-podman login ghcr.io -u geokkjer --password-stdin <<< "$(gh auth token)"
+BRUKER=$(gh api user --jq .login)   # f.eks. geokkjer
+podman login ghcr.io -u "$BRUKER" --password-stdin <<< "$(gh auth token)"
 ```
 
 > `gh auth token` henter tokenet `gh` allerede har. Scopes må inneholde
@@ -211,8 +231,8 @@ commit-SHA-en. Samme regel lokalt:
 ```bash
 SHA=$(git rev-parse --short HEAD)          # f.eks. 30700a8
 podman build -f ClaimTheSquare/Dockerfile \
-  --build-arg APP_VERSION="sha-$SHA" -t "ghcr.io/geokkjer/claimthesquare:sha-$SHA" .
-podman tag "ghcr.io/geokkjer/claimthesquare:sha-$SHA" ghcr.io/geokkjer/claimthesquare:latest
+  --build-arg APP_VERSION="sha-$SHA" -t "ghcr.io/$BRUKER/claimthesquare:sha-$SHA" .
+podman tag "ghcr.io/$BRUKER/claimthesquare:sha-$SHA" ghcr.io/$BRUKER/claimthesquare:latest
 ```
 
 > **Hvorfor `--build-arg APP_VERSION`?** Uten den blir versjonen `dev`, og da
@@ -231,15 +251,15 @@ podman tag "ghcr.io/geokkjer/claimthesquare:sha-$SHA" ghcr.io/geokkjer/claimthes
 nettverket; det andre tagget er gratis, fordi lagene allerede er lastet opp:
 
 ```bash
-podman push ghcr.io/geokkjer/claimthesquare:sha-$SHA
-podman push ghcr.io/geokkjer/claimthesquare:latest
+podman push ghcr.io/$BRUKER/claimthesquare:sha-$SHA
+podman push ghcr.io/$BRUKER/claimthesquare:latest
 ```
 
 **Steg 4 — se at det kom.** Lokalt, uten å røre noe:
 
 ```bash
-podman pull ghcr.io/geokkjer/claimthesquare:sha-$SHA
-podman inspect "ghcr.io/geokkjer/claimthesquare:sha-$SHA" --format '{{.Id}}'
+podman pull ghcr.io/$BRUKER/claimthesquare:sha-$SHA
+podman inspect "ghcr.io/$BRUKER/claimthesquare:sha-$SHA" --format '{{.Id}}'
 ```
 
 Samme image-ID på begge er bevis på at de to taggene peker på samme ting.
@@ -250,7 +270,7 @@ Start det, og sjekk at identitetskortet svarer med sha og ikke `latest`:
 podman run -d --name t -p 8080:8080 \
   -e MIGRATE_ON_STARTUP=false \
   -e ConnectionStrings__Postgres="Host=db;Database=test;Username=test;Password=test" \
-  "ghcr.io/geokkjer/claimthesquare:sha-$SHA"
+  "ghcr.io/$BRUKER/claimthesquare:sha-$SHA"
 sleep 5
 curl --fail --silent http://127.0.0.1:8080/version.json   # {"version":"sha-…"}
 podman rm -f t
@@ -571,6 +591,9 @@ du pusher, og stopp ved disse fire tingene:
 2. **`outputs: version`** på `image`-jobben. Jobber arver ikke `steps`-outputs fra
    hverandre — bare det jobben eksplisitt eksporterer. Uten den linja er
    `needs.image.outputs.version` tom, og da deployer du `latest` i stillhet.
+   Og merk: linja må peke på **sha-taggen**, ikke på `steps.meta.outputs.version`
+   — se felle nr. 3 i M2. Ellers deployer du `latest` i stillhet med en linje som
+   *ser* riktig ut, og jobben blir grønn mens den gjør feil ting.
 3. **`inputs.tag || needs.image.outputs.version`** — samme jobb gjør både vanlig
    deploy (push) og rollback (manuell kjøring med en tagg).
 4. **Rekkefølgen i jobben:** `pull` → `up -d` → helseport. Gaten kjører *etter* at
