@@ -97,12 +97,27 @@ jobs:
     if: github.event_name == 'push'
     # Deploy-jobben trenger taggen. Jobber arver ikke steps-outputs fra
     # hverandre — bare det jobben eksplisitt eksporterer her.
+    #
+    # IKKE steps.meta.outputs.version. Den er den FØRSTE taggen i
+    # metadata-actions prioritetsrekkefølge, og type=raw,value=latest vinner over
+    # type=sha — så den er "latest", uansett hvilket bygg vi lagde. Da brennes
+    # "latest" inn i identitetskortet, /version.json svarer "latest" for ethvert
+    # bygg, og deploy-jobben ruller ut latest i stillhet.
     outputs:
-      version: ${{ steps.meta.outputs.version }}
+      version: ${{ steps.sha.outputs.version }}
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
 
+      # Én kilde til sannheten for hvilken tagg dette bygget er. Vi regner den
+      # ut selv (samme lengde som metadata-action bruker: 7 tegn) slik at
+      # bygg-arg, røyk-test, push og deploy alle peker på SAMME verdi.
+      - name: Bestem sha-taggen
+        id: sha
+        run: echo "version=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      # metadata-action lager tag-lista. Den brukes til push, men ikke som
+      # versjon — det steget over.
       - name: Metadata og tags (sha-<kort> + latest)
         id: meta
         uses: docker/metadata-action@v6
@@ -121,7 +136,7 @@ jobs:
           load: true
           push: false
           build-args: |
-            APP_VERSION=${{ steps.meta.outputs.version }}
+            APP_VERSION=${{ steps.sha.outputs.version }}
           tags: ${{ steps.meta.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -145,15 +160,18 @@ jobs:
             -e ASPNETCORE_ENVIRONMENT=Production \
             -e ConnectionStrings__Postgres="Host=db;Port=5432;Database=test;Username=test;Password=test" \
             -e MIGRATE_ON_STARTUP=false \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.sha.outputs.version }}
           # 200 er ikke nok: svaret skal være JSON, og det skal være *dette* bygget
           for i in $(seq 1 20); do
             curl --fail --silent http://localhost:8080/health >/dev/null && break
             sleep 1
           done
           curl --fail --silent http://localhost:8080/health | grep -q '"status":"ok"'
+          # Denne gre-en er poenget med hele porten: at svaret inneholder sha-taggen
+          # og ikke "latest", beviser at APP_VERSION ble brent inn i imaget — og
+          # at porten kjører nettopp dette bygget, ikke et tidligere "latest".
           curl --fail --silent http://localhost:8080/health \
-            | grep -q "${{ steps.meta.outputs.version }}"
+            | grep -q "${{ steps.sha.outputs.version }}"
           # Frontenden skal serveres fra samme origin — det er hele arkitekturen
           curl --fail --silent http://localhost:8080/ | grep -q 'text-objects'
           docker rm -f test >/dev/null
@@ -174,8 +192,10 @@ jobs:
           context: .
           file: ClaimTheSquare/Dockerfile
           push: true
+          # Samme APP_VERSION som røyk-testen. Hvis de avviker, pusher vi et
+          # image med en versjon røyk-testen aldri testet.
           build-args: |
-            APP_VERSION=${{ steps.meta.outputs.version }}
+            APP_VERSION=${{ steps.sha.outputs.version }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
