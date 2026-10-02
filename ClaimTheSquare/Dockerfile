@@ -34,6 +34,14 @@ RUN dotnet publish ClaimTheSquare/ClaimTheSquare.csproj -c Release -o /app/publi
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
 
+# ARG er STAGE-SKOPET. Uten denne linja arver runtime-stagen ingen APP_VERSION
+# fra build-stagen — ARG gjelder bare der den er deklarert. Uten dette svarer
+# /health med "dev" uansett hva du bygget med, og røyk-testen i ci.yml kan ikke
+# bevise at porten kjører *dette* bygget. Det er akkurat den egenskapen
+# identitetskortet er ment for å ha.
+ARG APP_VERSION=dev
+ENV APP_VERSION=$APP_VERSION
+
 # Npgsql laster libgssapi_krb5.so.2 ved oppstart. Merk pakkenavnet:
 # libgssapi-krb5-2 inneholder .so.2 — libkrb5-3 gjør det IKKE.
 # wget brukes av healthchecken i compose.
