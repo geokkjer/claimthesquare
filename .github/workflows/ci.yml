@@ -247,7 +247,26 @@ jobs:
           export API_IMAGE=ghcr.io/${{ github.repository }}
           export IMAGE_TAG=${{ inputs.tag || needs.image.outputs.version }}
           podman compose -f compose.prod.yml pull
-          podman compose -f compose.prod.yml up -d
+          # --force-recreate + tjenestenavnet. Uten dette sier podman-compose:
+          #   Error: creating container storage: the container name
+          #   "claimthesquare-prod_api_1" is already in use
+          # altså byttes ingenting. Merk at `up -d` returnerer 0 selv med den
+          # feilen — så uten grep-en under ville deployen sett grønn ut mens
+          # serveren kjørte gammelt image.
+          #
+          # Bare `api`, ikke hele stacken: --force-recreate uten tjenestenavn
+          # gjenoppretter også `db`, og hver gang Postgres starter på nytt er
+          # både nedetid og en grunn til å tro at dataene er borte. Med navnet
+          # blir db-containeren urørt (verifisert: samme container-ID).
+          podman compose -f compose.prod.yml up -d --force-recreate api
+          # Bevis på at det faktisk byttet, før vi går videre. Uten denne linja
+          # får du den stille feilen igjen ved neste oppgradering av podman.
+          #
+          # Filtrer på containernavn, ikke på `compose ps -q api` — den finnes
+          # ikke i podman-compose 1.0.6 (den kom senere). Navnet følger
+          # prosjektet og tjenesten: <prosjekt>_<tjeneste>_1.
+          podman ps --filter "name=${COMPOSE_PROJECT_NAME:-claimthesquare-prod}_api" \
+            --format '{{.Image}}' | grep -qx "$API_IMAGE:$IMAGE_TAG"
           EOF
 
       - name: Helseport (retry i 60 s — containere trenger tid)
