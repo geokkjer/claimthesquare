@@ -7,6 +7,10 @@
 > CI-bygget image lokalt med `pull` + `up -d`.
 > **Appen:** `ClaimTheSquarePostgres/` i kursrepoet. Den er ferdig — **ikke bygg
 > den på nytt i dag.** Koden er ikke poenget; flyten er.
+> **M0 flytter den inn i et eget repo først.** Du begynner i kursrepoet, men
+> GitHub Actions finner bare workflows i repo-rota, så appen må ut på egen hånd.
+> Se «Hvor du starter» — og felle nr. 0 der, som handler om nøyaktig det
+> rotmappen-problemet.
 > **Windows?** Kommandoene står i bash-form. Bruker du PowerShell, se
 > erstatningene i [`../uke-1/00-setup-podman.md`](../uke-1/00-setup-podman.md) →
 > «Kommandoer i kurset», og sett tagger i `.env` i stedet for i `$env:`.
@@ -70,28 +74,122 @@ Intro: hva vi bygger (20 min) | — |
 
 ## M0 — før du begynner (15 min)
 
+### Hvor du starter
+
+**Du begynner i kursrepoet, og du flytter appen inn i et nytt, eget repo.** Appen
+ligger i `ClaimTheSquarePostgres/` under kursrepoet, sammen med alt annet du har
+gjort i kurset. I dag skal den bli **sitt eget** repo på GitHub.
+
+Hvorfor? GitHub Actions leser `.github/workflows/` **bare i rota av repoet**. Den
+leter ikke i undermapper. Derfor kan ikke appen bli liggende inne i kursrepoet
+med en pipeline — den må ut til et eget repo der rotnivået er rotnivået.
+
+> **Fell nr. 0, og den er den første du møter.** `cp -r KILDE MÅL` kopierer
+> **mappen** når målet finnes fra før — og gir deg alt **én mappe dypt**:
+>
+> ```text
+> ~/Prosjekter/claimthesquare/          ← repoet ditt, med README i
+> └── ClaimTheSquarePostgres/          ← appen, her
+>     └── .github/workflows/ci.yml     ← GitHub ser den aldri
+> ```
+>
+> Du får et grønt lokalt `podman compose up`, ingenting som feiler, og en
+> pipeline som aldri kjører. Den feilen er **stille** — den er den vanligste
+> grunnen til at M1 bruker en time på å finne ut hvorfor Actions ikke vises.
+> Har du en gang committet fra en mappe du ikke mente å, står rotmappen-feilen
+> deg i hodet. Det er grunnen til at kontrollen i steg 2 finnes.
+>
+> Derfor: kopier **innholdet** av mappen, ikke mappen. `rsync` med en
+> avsluttende `/` på kilden gjør det — uansett om målet finnes fra før eller
+> ikke — og den har en `--exclude` for `bin/` og `obj/` som du ikke vil ha med.
+
 ### 0a. Få appen inn i ditt eget repo
 
-Appen ligger i kursrepoet. GitHub Actions leser `.github/workflows/` **bare i
-rota av repoet**, så appen må bli sitt eget repo:
-
 ```bash
-cp -r <kursrepo>/ClaimTheSquarePostgres ~/Prosjekter/claimthesquare
+# 1. Lag målmappen, og flytt INNHOLDET inn — ikke mappen.
+#    Skillet er den avsluttende / på Kilden. (rsync følger med på Linux/macOS.)
+mkdir -p ~/Prosjekter/claimthesquare
+rsync -a --exclude 'bin/' --exclude 'obj/' \
+      ~/kurs/ClaimTheSquarePostgres/ \
+      ~/Prosjekter/claimthesquare/
+
 cd ~/Prosjekter/claimthesquare
+
+# 2. Sjekk at rotnivået faktisk er riktig, FØR du gjør git noe.
+#    ls alene skriver bare «cannot access» og fortsetter. Med -l stopper den
+#    på første mangel — og du ser hva som mangler, ikke at noe gjorde det.
+ls -l .github/workflows/ci.yml compose.yml compose.prod.yml \
+      ClaimTheSquare.slnx .env.example
+
+#    Og en til: rotnivået skal IKKE inneholde appmappen.
+ls -d ClaimTheSquarePostgres 2>/dev/null && echo "FEIL: appen ligger i en undermappe"
+
+# 3. Nå git.
 git init -b main
 git add -A
 git commit -m "ClaimTheSquare: app, compose og pipeline"
 gh repo create claimthesquare --public --source . --push
-# uten gh: lag repoet på github.com og `git remote add origin … && git push -u origin main`
+# uten gh: lag repoet på github.com og
+#   `git remote add origin … && git push -u origin main`
 ```
 
+> **Hvis du allerede har et repo på GitHub med navnet `claimthesquare`** (fordi
+> du prøvde 0a en gang før): ikke kjør `gh repo create` — den feiler med «already
+> exists». Lag repoet på github.com i stedet, tomt og uten README, og kjør:
+>
+> ```bash
+> git remote add origin git@github.com:<deg>/claimthesquare.git
+> git push -u origin main
+> ```
+
+> **Hvorfor `--exclude 'bin/' 'obj/'`?** De to mappene er maskin-generert og
+> inneholder absolute stier fra den maskinen de ble bygget på. De er ubrukelige
+> på en annen maskin, de fyller repoet med 200+ filer, og de gjør hver commit
+> urolig. `dotnet build` lager dem på nytt uansett. (I en `Dockerfile` og i
+> `.dockerignore` er de samme ting — bare der teller de for bildet.)
+
+- [ ] `ls -l` i steg 2 fant alle fem filene i **rota** — ingen av dem i en undermappe
+- [ ] Rotnivået inneholder **ikke** mappen `ClaimTheSquarePostgres/`
 - [ ] Repoet på GitHub viser `ClaimTheSquare/`, `compose.yml` og `.github/` i rota
 - [ ] `.env` er **ikke** med (`git status` skal ikke nevne den — den står i `.gitignore`)
+- [ ] `git ls-files | wc -l` er et tall i størrelsesorden 20, ikke 200+
+
+> **Hvis du gjorde 0a med `cp` fra en tidligere kjøring:** du har sannsynligvis
+> et repo der alt ligger i en undermappe. Rett det sånn — og kjør hele blokken,
+> den har fire forbehold som alle er uttestet:
+>
+> ```bash
+> cd ~/Prosjekter/claimthesquare
+>
+> # (1) Har du en .git INNE I undermappen? Da ser git hele mappen som én
+> #     «embedded repository», og du får 1 fil i stedet for 14. Fjern den først.
+> rm -rf ClaimTheSquarePostgres/.git
+> git rm -r -q --cached ClaimTheSquarePostgres 2>/dev/null
+>
+> # (2) Flytt med `mv`, ikke `git mv` — git mv stopper på tomme underkataloger
+> #     («source directory is empty»), og du har nesten alltid en.
+> mv ClaimTheSquarePostgres/* . && mv ClaimTheSquarePostgres/.github .
+> rm -rf ClaimTheSquarePostgres
+>
+> # (3) Har bin/obj blitt committet? Da må de ut av index.
+> git rm -r -q --cached $(git ls-files | grep -E '(^|/)(bin|obj)/') 2>/dev/null
+>
+> # (4) Sjekk rotnivået FØR du committer — samme kontroll som steg 2.
+> ls -l .github/workflows/ci.yml compose.yml compose.prod.yml \
+>       ClaimTheSquare.slnx .env.example
+> git ls-files | wc -l          # et tall i 20-årene, ikke 200+
+>
+> git add -A && git commit -m "flytt appen til repo-rota" && git push
+> ```
+>
+> Etterpå: se M1 og sjekk at Actions faktisk har startet en kjøring. Har den ikke,
+> er rotmappen-feilen ennå ikke helt borte.
 
 ### 0b. Se at appen virker lokalt
 
 ```bash
 cp .env.example .env
+chmod 644 db/init/*.sql              # se felle nr. 1 nedenfor
 podman compose up -d --build
 curl --fail http://localhost:8080/health          # {"status":"ok","version":"dev"}
 curl --fail http://localhost:8080/text-objects    # []
@@ -183,7 +281,7 @@ Følg kjøringen i Actions. Alle fire jobbene skal bli grønne.
 - [ ] Pakken er public
 - [ ] `sha-…` står i notatboken din, bokstav for bokstav
 
-> **Felle nr. 3, og den er den mest nesten:** det er lett å tro at
+> **Felle nr. 2, og den er den mest nesten:** det er lett å tro at
 > `steps.meta.outputs.version` er sha-taggen. Den er **ikke** det. Den er den
 > *første* taggen i metadata-actions prioritetsrekkefølge, og `type=raw,value=latest`
 > vinner over `type=sha` — så den er `latest`, uansett hvilket bygg du lagde.
@@ -248,7 +346,9 @@ podman tag "ghcr.io/$BRUKER/claimthesquare:sha-$SHA" ghcr.io/$BRUKER/claimthesqu
 > Det er akkurat feilen `ci.yml` hadde da denne leksjonen ble skrevet.
 
 **Steg 3 — push.** Ett image, to tagger. `podman push` sender lagene over
-nettverket; det andre tagget er gratis, fordi lagene allerede er lastet opp:
+nettverket; det andre tagget er gratis, fordi lagene allerede er lastet opp.
+`$BRUKER` og `$SHA` er satt i steg 1 og 2 — kjør dem i samme terminal, eller sett
+dem på nytt:
 
 ```bash
 podman push ghcr.io/$BRUKER/claimthesquare:sha-$SHA
@@ -351,24 +451,73 @@ cat ~/.ssh/id_ed25519.pub               # lim inn ved "Create server"
 ```
 
 Så: **logg inn med standardbrukeren på imaget** (på Ubuntu heter den `ubuntu`),
-lag brukeren `deploy`, og flytt nøkkelen over:
+lag brukeren `deploy`, og flytt nøkkelen over. Dette er tre små steg, og det
+viktigste er det andre.
 
 ```bash
 ssh ubuntu@<VPS-IP>
 
+# Steg 1 — lag brukeren. --disabled-password låser innlogging med passord.
 sudo adduser --disabled-password --gecos "" deploy
 sudo passwd deploy                              # ← ikke hopp over denne
+
+# Steg 2 — FLYTT NØKKELEN. Dette er linja som gjør at deploy-jobben virker.
 sudo install -d -m 700 -o deploy -g deploy /home/deploy/.ssh
-sudo install -m 600 -o deploy -g deploy /home/ubuntu/.ssh/authorized_keys /home/deploy/.ssh/authorized_keys
+sudo install -m 600 -o deploy -g deploy \
+  /home/ubuntu/.ssh/authorized_keys \
+  /home/deploy/.ssh/authorized_keys
+
+# Steg 3 — gi deploy sudo, og la prosessene leve uten innlogging
 sudo usermod -aG sudo deploy
 sudo loginctl enable-linger deploy
 exit
 ```
 
+#### Steg 2 er hele poenget med «ett hopp»
+
+`authorized_keys` er filen som bestemmer **hvem som får komme inn**. Gandi la
+nøkkelen din der ved oppretting — under `ubuntu`. Nå kopierer du den til
+`deploy`. Tre ting må være riktige, og alle tre er i den ene `install`-linja:
+
+| Hva | Hvorfor | Hvis det er feil |
+|---|---|---|
+| `-o deploy -g deploy` | eierskapet må være `deploy` | SSH nekter nøkkelen: «bad ownership» |
+| `-m 600` på `.ssh`-katalogen | ellers godtar SSH den ikke | «bad ownership or modes» |
+| `-m 600` på `authorized_keys` | filen er en adgangsliste — ingen andre skal kunne skrive til den | «bad ownership or modes» |
+
+> **Hvorfor kopiere framfor å bruke `ssh-copy-id`?** `ssh-copy-id` ville også
+> virket, men den skriver filen som `ubuntu`, og så må du rette eierskapet med en
+> ekstra `chown` og en ekstra `chmod`. `install` gjør alle tre tingene på én
+> linje, og den er idempotent — du kan kjøre den igjen.
+>
+> **Hvorfor ikke bare gi `ubuntu` sudo og stoppe der?** Du *kan* det. Men da er
+> `deploy`-steget i M5 meningsløst, og brukeren som kjører containerne på
+> internett er den samme som har full sudo. `deploy` er den eneste veien inn,
+> og det er den som gjør at en pipeline som logger inn med en nøkkel har minst
+> mulig rettigheter.
+
+**Verifiser med en ny terminal — ikke med den du allerede er logget inn med.**
+En åpen SSH-sesjon har allerede godtatt nøkkelen, så den beviser ingenting:
+
+```bash
+ssh deploy@<VPS-IP> 'echo "nøkkelen virket: $(whoami)" && sudo -n true && echo "sudo krever passord"'
+# nøkkelen virket: deploy
+# sudo krever passord
+```
+
+> **Hvis du får «Permission denied (publickey)»:** kjør
+> `sudo ls -la /home/deploy/.ssh/` på serveren som `ubuntu`, og se at eierskapet
+> er `deploy deploy` på begge filene. Nesten alltid er det det.
+
+> **Hvorfor går *den private* nøklen aldri til serveren?** Den skal aldri. Den
+> ligger på maskinen din, og senere i dag legger du den inn som GitHub-secret
+> `VPS_SSH_KEY` (M5) — fordi det er *pipelinen* som skal logge inn, ikke du.
+> Serveren får bare den offentlige halvdelen, som ikke kan brukes til noe som
+> helst uten den private. Det er hele poenget med nøkkelpar: den ene kan deles,
+> den andre kan det ikke.
+
 > **Hvorfor ikke `root`?** På Ubuntu-imagene hos Gandi er innlogging som `root`
-> stengt, og `ubuntu` er brukeren med `sudo`. Nøkkelen du la inn ved oppretting
-> ligger i `/home/ubuntu/.ssh/authorized_keys` — det er den vi kopierer videre
-> til `deploy`, slik at `deploy` er den eneste veien inn.
+> stengt, og `ubuntu` er brukeren med `sudo`.
 
 > **Hvorfor `passwd deploy`?** `--disabled-password` låser passordet. SSH-nøkkelen
 > får deg inn, men `sudo` krever *autentisering* — og med et låst passord får du
@@ -577,7 +726,7 @@ Nå skal den som gjorde jobben for hånd, gå bort. Men først: to ting i GitHub
 > sertifikatet og i DNS. Hemmeligheter skal være hemmelige, konfigurasjon skal
 > være lesbar, og begge skal være versjonerte et sted du kan vise frem.
 
-> **Felle nr. 2:** `ssh-keyscan` tar et **vertsnavn**, ikke `user@host`. Limer du
+> **Felle nr. 3:** `ssh-keyscan` tar et **vertsnavn**, ikke `user@host`. Limer du
 > inn `deploy@1.2.3.4` i `VPS_HOST`, feiler første steg i deploy-jobben med
 > `getaddrinfo … Name or service not known` — og feilen ser ut som et
 > nettverksproblem. Derfor er brukeren skilt ut i `VPS_USER`.
@@ -592,7 +741,7 @@ du pusher, og stopp ved disse fire tingene:
    hverandre — bare det jobben eksplisitt eksporterer. Uten den linja er
    `needs.image.outputs.version` tom, og da deployer du `latest` i stillhet.
    Og merk: linja må peke på **sha-taggen**, ikke på `steps.meta.outputs.version`
-   — se felle nr. 3 i M2. Ellers deployer du `latest` i stillhet med en linje som
+   — se felle nr. 2 i M2. Ellers deployer du `latest` i stillhet med en linje som
    *ser* riktig ut, og jobben blir grønn mens den gjør feil ting.
 3. **`inputs.tag || needs.image.outputs.version`** — samme jobb gjør både vanlig
    deploy (push) og rollback (manuell kjøring med en tagg).
