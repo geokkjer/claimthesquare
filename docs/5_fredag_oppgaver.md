@@ -630,6 +630,68 @@ nginx det som matchet — og da blir `/text-objects` til `/`, og du får 404 fra
 appen mens det ser ut som om det er appen som er ødelagt. Forskjellen er ett
 tegn, og nginx har to helt ulike regler for `proxy_pass`.
 
+#### Hvorfor nginx *ikke* er en tjeneste i compose
+
+Intensjonen er god, og den er faktisk den compose ble laget for: én fil, én
+`up -d`, ingen rørdraging. Her kjøres jo allerede `api` og `db` i compose, og
+utrullingen er `pull && up -d`. Så hvorfor er nginx holdt utenfor?
+
+**1. Port 80 er under 1024, og rootless podman får ikke binde den.** Prøv det:
+
+```bash
+podman run --rm -p 80:80 docker.io/library/nginx:alpine
+# Error: pasta failed with exit code 1:
+# Listen failed for HOST TCP port */80: Permission denied
+```
+
+Og merk at `--cap-add=NET_BIND_SERVICE` **ikke** hjelper:
+
+```bash
+podman run --rm --cap-add=NET_BIND_SERVICE -p 80:80 docker.io/library/nginx:alpine
+# Listen failed for HOST TCP port */80: Permission denied
+```
+
+Rootless-containeren får ikke slike capabilities. Så det er realistisk to veier:
+kjøre containeren som `root` (da får `api` og `db` også root, og hele
+`loginctl enable-linger`-argumentet forsvinner), eller sette
+
+```bash
+sudo sysctl net.ipv4.ip_unprivileged_port_start=0
+```
+
+Den siste er den vanlige løsningen — og den er en **maskinomfattende** endring.
+Den åpner port 80 for *alle* prosesser som kjører som din bruker, også utenfor
+containere, og den overlever omstart før du legger den i `/etc/sysctl.d/`. Det er
+en reell sikkerhetskostnad for å spare én fil.
+
+**2. `certbot` skriver inn i nginx sin egen katalog.** `certbot --nginx` endrer
+konfigurasjonen der den ligger. Ligger den i en container, ligger endringen i
+containerens lag — og neste `up -d` erstatter containeren og tar den med seg.
+Sertifikatet fornyes to ganger i døgnet av en systemd-timer; med nginx på verten
+skriver den til disk og nginx plukker det opp. Med nginx i en container må
+cert-fila mountes inn, og noe må kjøre `nginx -s reload` etter hver fornyelse.
+Det er to ekstra bevegelige deler i den mest tidskritiske jobben på maskinen.
+
+**3. Feilsøkingen blir dårligere, og det er det som rammer deg først.** Med
+nginx på verten har du `sudo nginx -t` (gyldig konfig?) og
+`sudo journalctl -u nginx -n 50` (hva skjedde?) — verktøy som finnes på maskinen
+uansett hva som kjører i den. Med nginx i en container må du først finne ut
+hvilken container det gjelder. En `502` betyr i begge tilfeller «proxy_pass nådde
+ikke appen», men i det andre tilfellet er det tre ting til som kan ha gått galt:
+nginx startet ikke, nginx startet for tidlig, eller appen er nede.
+
+> **Når du ville valgt nginx i compose:** når noe annet eier ingressen — en
+> Traefik, en nginx-Ingress i Kubernetes, en Cloudflare-tunnel. Da er nginx en
+> av mange containere bak en felles inngang, og konfigurasjonen hører til
+> *appen*, ikke til maskinen. Så lenge nginx er den eneste veien inn på en maskin
+> du rører selv, er den en del av maskinen.
+
+> **Ett argument til for verten, som er litt flinkt:** når oppgaven ber deg slette
+> VPS-en til slutt, forsvinner alt du har laget i compose med én kommando.
+> nginx-konfigurasjonen og `certbot` ligger i `/etc` og `~/.config/letsencrypt` —
+> og en maskin du tør slette er en maskin du kan bygge på nytt uten å tenke på
+> hva som hang igjen.
+
 ### 4d. Filene og hemmelighetene på serveren
 
 Filen `compose.prod.yml` trenger en `.env` ved siden av seg på serveren. Den
